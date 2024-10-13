@@ -1,0 +1,461 @@
+substitutions:
+  devicename: m5stick
+  upper_devicename: M5StickC
+  hide_magnetic_field_strength_sensors: 'true'
+
+esphome:
+  name: $devicename
+  platform: ESP32
+  board: m5stick-c
+  platformio_options:
+    upload_speed: 115200
+  includes:
+    - bmi270_custom.h
+  libraries:
+    - "SPI"
+    - "Wire"
+    - "Adafruit BusIO"
+    - "Adafruit Unified Sensor"
+    - "Adafruit BMP280 Library"
+    - "M5Unit-IMU-Pro-Mini"
+
+globals:
+  - id: half_rotations_total
+    type: long
+    restore_value: yes
+    initial_value: '0'
+  - id: half_rotations_flow
+    type: long
+    restore_value: yes
+    initial_value: '0'
+  - id: axis_value_high
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: calibrating
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: calibrating_axis_x_min
+    type: float
+    restore_value: no
+  - id: calibrating_axis_x_max
+    type: float
+    restore_value: no
+  - id: calibrating_axis_y_min
+    type: float
+    restore_value: no
+  - id: calibrating_axis_y_max
+    type: float
+    restore_value: no
+  - id: calibrating_axis_z_min
+    type: float
+    restore_value: no
+  - id: calibrating_axis_z_max
+    type: float
+    restore_value: no
+
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  ap:
+    ssid: $devicename Fallback Hotspot
+    password: !secret wifi_password
+
+captive_portal:
+
+logger:
+  logs:
+    component: ERROR
+
+api:
+  services:
+    - service: set_total
+      variables:
+        new_total: float
+      then:
+        - globals.set:
+            id: half_rotations_total
+            value: !lambda 'return new_total / id(volume_per_half_rotation).state;'
+
+ota:
+  - platform: esphome
+
+external_components:
+  - source: github://martydingo/esphome-axp192
+    components: [axp192]
+
+# stores the correct axis after calibration for the BMI270
+select:
+  - platform: template
+    id: axis
+    name: Axis
+    entity_category: config
+    options:
+      - x
+      - y
+      - z
+      - None
+    initial_option: None
+    update_interval: never
+    restore_value: true
+    optimistic: true
+
+number:
+  - platform: template
+    id: threshold_upper
+    name: Threshold upper
+    entity_category: config
+    mode: box
+    min_value: -9999
+    max_value: 9999
+    step: 0.1
+    initial_value: 9999
+    update_interval: never
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: µT
+  - platform: template
+    id: threshold_lower
+    name: Threshold lower
+    entity_category: config
+    mode: box
+    min_value: -9999
+    max_value: 9999
+    step: 0.1
+    initial_value: 9999
+    update_interval: never
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: µT
+  - platform: template
+    id: volume_per_half_rotation
+    name: Volume per half rotation
+    entity_category: config
+    mode: box
+    min_value: 0
+    max_value: 9999999
+    step: 0.000000001
+    initial_value: '0.01008156'
+    update_interval: never
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: gal
+  - platform: template
+    id: calibration_seconds
+    name: Calibration time
+    entity_category: config
+    icon: mdi:timer
+    mode: box
+    min_value: 1
+    max_value: 999
+    step: 1
+    initial_value: 5
+    update_interval: never
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: s
+
+button:
+  - platform: template
+    id: calibrate_button
+    name: Calibrate axis
+    entity_category: config
+    on_press:
+      - lambda: |-
+          ESP_LOGI("calibration", "Starting calibration. Make sure water is running");
+          id(calibrating_axis_x_min) = std::numeric_limits<float>::max();
+          id(calibrating_axis_x_max) = std::numeric_limits<float>::lowest();
+          id(calibrating_axis_y_min) = std::numeric_limits<float>::max();
+          id(calibrating_axis_y_max) = std::numeric_limits<float>::lowest();
+          id(calibrating_axis_z_min) = std::numeric_limits<float>::max();
+          id(calibrating_axis_z_max) = std::numeric_limits<float>::lowest();
+          id(calibrating) = true;
+      - delay: !lambda return id(calibration_seconds).state * 1000;
+      - lambda: |-
+          id(calibrating) = false;
+          ESP_LOGI("calibration", "x min %.1f y min %.1f z min %.1f",calibrating_axis_x_min,calibrating_axis_y_min,calibrating_axis_z_min);
+          ESP_LOGI("calibration", "x max %.1f y max %.1f z max %.1f",calibrating_axis_x_max,calibrating_axis_y_max,calibrating_axis_z_max);
+          float x_range = id(calibrating_axis_x_max) - id(calibrating_axis_x_min);
+          float y_range = id(calibrating_axis_y_max) - id(calibrating_axis_y_min);
+          float z_range = id(calibrating_axis_z_max) - id(calibrating_axis_z_min);
+          ESP_LOGI("calibration", "x range %.1f y range %.1f z range %.1f",x_range,y_range,z_range);
+          if (x_range < 0) {
+            ESP_LOGW("calibration", "Didn't get any values for x");
+          } else {
+            ESP_LOGI("calibration", "x ranged from %.2f to %.2f",
+                     id(calibrating_axis_x_min), id(calibrating_axis_x_max));
+          }
+          if (y_range < 0) {
+            ESP_LOGW("calibration", "Didn't get any values for y");
+          } else {
+            ESP_LOGI("calibration", "y ranged from %.2f to %.2f",
+                     id(calibrating_axis_y_min), id(calibrating_axis_y_max));
+          }
+          if (z_range < 0) {
+            ESP_LOGW("calibration", "Didn't get any values for z");
+          } else {
+            ESP_LOGI("calibration", "z ranged from %.2f to %.2f",
+                     id(calibrating_axis_z_min), id(calibrating_axis_z_max));
+          }
+          std::string axis_with_largest_range;
+          float min, max;
+          if (x_range > 20 && x_range > y_range && x_range > z_range) {
+            axis_with_largest_range = "x";
+            min = id(calibrating_axis_x_min);
+            max = id(calibrating_axis_x_max);
+          } else if (y_range > 20 && y_range > x_range && y_range > z_range) {
+            axis_with_largest_range = "y";
+            min = id(calibrating_axis_y_min);
+            max = id(calibrating_axis_y_max);
+          } else if (z_range > 20 && z_range > x_range && z_range > y_range) {
+            axis_with_largest_range = "z";
+            min = id(calibrating_axis_z_min);
+            max = id(calibrating_axis_z_max);
+          } else {
+            ESP_LOGE("calibration", "Calibration failed. No axis had a range of at least 20");
+            return;
+          }
+          float lower_threshold = min + (max - min) / 2 - 5;
+          float upper_threshold = min + (max - min) / 2 + 5;
+          ESP_LOGI("calibration", "Selected %s axis with lower threshold: %.2f and upper threshold: %.2f",
+                   axis_with_largest_range.c_str(), lower_threshold, upper_threshold);
+          id(axis).make_call().set_option(axis_with_largest_range).perform();
+          id(threshold_lower).make_call().set_value(roundf(lower_threshold * 10) / 10).perform();
+          id(threshold_upper).make_call().set_value(roundf(upper_threshold * 10) / 10).perform();
+
+# AXP192 power management - must be present to initialize TFT power on
+sensor:
+  - platform: axp192
+    model: M5STICKC
+    address: 0x34
+    i2c_id: bus_a
+    update_interval: 30s
+    battery_level:
+      name: "M5Stick Battery Level"
+      id: "m5stick_batterylevel"
+  - platform: bmp280
+    temperature:
+      name: "Tempurature"
+      oversampling: 16x
+    pressure:
+      name: "Pressure"
+    i2c_id: bus_b
+    address: 0x76
+    update_interval: 60s
+  - platform: template
+    name: Axis Value
+    id: axis_value
+    on_raw_value:
+      then:
+        - lambda: |-
+            if (x > id(threshold_upper).state && !id(axis_value_high)) {
+              id(axis_value_high) = true;
+              id(half_rotations_total) += 1;
+              id(half_rotations_flow) += 1;
+              id(led1).turn_on();
+            } else if (x < id(threshold_lower).state && id(axis_value_high)) {
+              id(axis_value_high) = false;
+              id(led1).turn_off();
+            }
+    filters:
+      - delta: 3
+
+# BMI270 custom component
+  - platform: custom
+    lambda: |-
+      auto bmi270 = new CustomBMI270();
+      App.register_component(bmi270);
+      return {bmi270->magnetic_x, bmi270->magnetic_y, bmi270->magnetic_z};
+
+    sensors:
+    - name: "Magnetic X"
+      id: bmi270_axis_x
+      internal: ${hide_magnetic_field_strength_sensors}
+      on_raw_value:
+        then:
+          - lambda: |-
+              if (id(axis).state == "x") id(axis_value).publish_state(x);
+              if (id(calibrating)) {
+                ESP_LOGI("calibration", "x value %.1f",x);
+                id(calibrating_axis_x_min) = min(id(calibrating_axis_x_min), x);
+                id(calibrating_axis_x_max) = max(id(calibrating_axis_x_max), x);
+              }
+      filters:
+        - delta: 3
+    - name: "Magnetic Y"
+      id: bmi270_axis_y
+      internal: ${hide_magnetic_field_strength_sensors}
+      on_raw_value:
+        then:
+          - lambda: |-
+              if (id(axis).state == "y") id(axis_value).publish_state(x);
+              if (id(calibrating)) {
+                ESP_LOGI("calibration", "y value %.1f",x);
+                id(calibrating_axis_y_min) = min(id(calibrating_axis_y_min), x);
+                id(calibrating_axis_y_max) = max(id(calibrating_axis_y_max), x);
+              }
+      filters:
+        - delta: 3
+    - name: "Magnetic Z"
+      id: bmi270_axis_z
+      internal: ${hide_magnetic_field_strength_sensors}
+      on_raw_value:
+        then:
+          - lambda: |-
+              if (id(axis).state == "z") id(axis_value).publish_state(x);
+              if (id(calibrating)) {
+                ESP_LOGI("calibration", "z value %.1f",x);
+                id(calibrating_axis_z_min) = min(id(calibrating_axis_z_min), x);
+                id(calibrating_axis_z_max) = max(id(calibrating_axis_z_max), x);
+              }
+      filters:
+        - delta: 3
+
+  - platform: template
+    id: sensor_half_rotations_total
+    name: Half rotations total
+    lambda: return id(half_rotations_total);
+    update_interval: 1s
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: 'total_increasing'
+    icon: 'mdi:counter'
+    filters:
+      - delta: 1
+  - platform: template
+    id: sensor_total
+    name: Total
+    lambda: return id(half_rotations_total) * id(volume_per_half_rotation).state;
+    update_interval: 10s
+    accuracy_decimals: 2
+    device_class: 'water'
+    icon: 'mdi:water'
+    state_class: 'total_increasing'
+    unit_of_measurement: 'gal'
+    filters:
+      - or:
+          - throttle: 60s
+          - delta: 0.01
+  - platform: template
+    id: sensor_flow
+    name: Flow
+    lambda: |-
+      float flow = id(half_rotations_flow) * id(volume_per_half_rotation).state * 60.0 / 10;
+      id(half_rotations_flow) = 0;
+      return flow;
+    update_interval: 10s
+    accuracy_decimals: 2
+    state_class: measurement
+    unit_of_measurement: = gal/min
+    filters:
+      - or:
+        - throttle: 60s
+        - delta: 0.01
+
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO37
+      inverted: true
+    name: ${upper_devicename} Button A
+    on_press:
+      then:
+        - light.turn_on: led1
+    on_release:
+      then:
+        - light.turn_off: led1
+
+  - platform: gpio
+    pin:
+      number: GPIO39
+      inverted: true
+    name: ${upper_devicename} Button B
+    on_press:
+      then:
+        - light.turn_on: led1
+    on_release:
+      then:
+        - light.turn_off: led1
+
+light:
+  - platform: monochromatic
+    output:  builtin_led
+    name: ${upper_devicename} Led
+    id: led1
+
+output:
+  - platform: ledc
+    pin: 10
+    inverted: true
+    id: builtin_led
+
+#remote_transmitter:
+#  - pin:
+#      number: GPIO9
+#    carrier_duty_percent: 50%
+#    id: internal
+
+spi:
+  clk_pin: GPIO13
+  mosi_pin: GPIO15
+
+i2c:
+   - id: bus_a
+     sda: GPIO21
+     scl: GPIO22
+     scan: True
+   - id: bus_b
+     sda: GPIO32
+     scl: GPIO33
+     scan: True
+
+font:
+  - file: "gfonts://Roboto"
+    id: roboto
+    size: 20
+
+color:
+  - id: my_white
+    red: 100%
+    green: 100%
+    blue: 100%
+  - id: my_black
+    red: 0%
+    green: 0%
+    blue: 0%
+
+# 1.14 inch, 135*240 Colorful TFT LCD, ST7789v2
+display:
+  - platform:  st7789v
+    model: TTGO TDisplay 135x240
+    cs_pin: GPIO5
+    dc_pin: GPIO23
+    reset_pin: GPIO18
+    rotation: 270
+    update_interval: 1s
+    lambda: |-
+      it.fill(id(my_black));
+      it.printf(0, 0, id(roboto), id(my_white), "x: %.1f", id(bmi270_axis_x).state);
+      it.printf(0, 20, id(roboto), id(my_white), "y: %.1f", id(bmi270_axis_y).state);
+      it.printf(0, 40, id(roboto), id(my_white), "z: %.1f", id(bmi270_axis_z).state);
+
+i2s_audio:
+  id: bus_i2s
+  i2s_lrclk_pin: G26
+  i2s_bclk_pin: G0
+
+microphone:
+  - platform: i2s_audio
+    i2s_din_pin: GPIO34
+    i2s_audio_id: bus_i2s
+    adc_type: external
+    pdm: true
+    id: mic
+
+web_server:
+  port: 80
+
