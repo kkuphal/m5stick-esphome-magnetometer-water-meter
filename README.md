@@ -9,3 +9,4 @@ Since I have almost zero soldering skills, this was a far easier project than bu
 
 Hope you find this helpful
 
+![20241013_024931900_iOS](https://github.com/user-attachments/assets/ed221dba-cb52-4c58-93f0-cdee0154e574)
